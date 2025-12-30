@@ -1,0 +1,26 @@
+# Automatic MedSAM Requirements
+# For RTX 4060 8GB VRAM optimization
+
+# Core PyTorch (CUDA 11.8 or 12.1)
+torch
+torchvision
+
+# Segment Anything Model
+segment-anything @ git+https://github.com/facebookresearch/segment-anything.git
+
+# Image Processing
+numpy
+Pillow
+
+# NIfTI Medical Image Support
+nibabel
+
+# Visualization
+matplotlib
+
+# Progress Bars
+tqdm
+
+# Optional: For development and debugging
+# ipython>=8.0.0
+# jupyter>=1.0.0
