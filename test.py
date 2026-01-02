@@ -26,6 +26,12 @@ Usage:
     
     # Save predictions
     python test.py --data_dir ./processed_data/ACDC --task LV --checkpoint ./output/LV/checkpoints/best_model.pth --save_predictions
+    
+    # Save visualizations for each sample
+    python test.py --data_dir ./processed_data/ACDC --task LV --checkpoint ./output/LV/checkpoints/best_model.pth --save_visualizations
+    
+    # Save both predictions and visualizations
+    python test.py --data_dir ./processed_data/ACDC --task LV --checkpoint ./output/LV/checkpoints/best_model.pth --save_predictions --save_visualizations
 """
 
 # Fix OpenMP duplicate library issue (must be before other imports)
@@ -274,17 +280,24 @@ class Tester:
                 # Save visualization snapshot if requested
                 if self.save_visualizations and self.visualizer is not None:
                     # Get image for visualization
-                    image = batch['image'][i] if 'image' in batch else pred[0]
+                    image = batch['image'][i] if 'image' in batch else None
                     gt_bbox = batch['bbox'][i] if 'bbox' in batch else None
+                    
+                    # If no image available, create a placeholder from the mask shape
+                    if image is None:
+                        # Use a gray placeholder image
+                        image = torch.zeros_like(target[0])
                     
                     # Create metrics dict for display
                     metrics_dict = {
                         'dice': dice,
                         'iou': iou,
-                        'hd95': hd95
+                        'hd95': hd95,
+                        'surface_dice': surf_dice
                     }
                     
-                    self.visualizer.save_snapshot(
+                    # Save individual visualization for this sample
+                    vis_path = self.visualizer.save_snapshot(
                         image=image,
                         prediction=pred[0],
                         ground_truth=target[0],
@@ -296,6 +309,15 @@ class Tester:
                         loss_dict=metrics_dict,
                         dice_score=dice,
                         sample_name=name
+                    )
+                    
+                    # Also save a simplified single-image visualization
+                    self._save_simple_visualization(
+                        image=image,
+                        pred_mask=pred_np,
+                        gt_mask=target_np,
+                        dice=dice,
+                        name=name
                     )
                 
             # Update progress bar
@@ -325,6 +347,97 @@ class Tester:
             self._save_results(metrics, sample_results)
         
         return metrics
+    
+    def _save_simple_visualization(
+        self,
+        image: torch.Tensor,
+        pred_mask: np.ndarray,
+        gt_mask: np.ndarray,
+        dice: float,
+        name: str
+    ) -> None:
+        """
+        Save a simple side-by-side visualization for each sample.
+        
+        Creates a 3-panel figure: Image | Ground Truth | Prediction
+        
+        Args:
+            image: Input image tensor.
+            pred_mask: Predicted binary mask [H, W].
+            gt_mask: Ground truth mask [H, W].
+            dice: Dice score.
+            name: Sample name.
+        """
+        import matplotlib.pyplot as plt
+        
+        # Prepare image
+        if isinstance(image, torch.Tensor):
+            image = image.detach().cpu().numpy()
+        
+        if image.ndim == 3:
+            if image.shape[0] in [1, 3]:
+                image = np.transpose(image, (1, 2, 0))
+            if image.shape[-1] == 1:
+                image = image[:, :, 0]
+        
+        if image.max() > 1.0:
+            image = image / image.max()
+        
+        # Create figure
+        fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+        
+        # Panel 1: Original Image
+        if image.ndim == 2:
+            axes[0].imshow(image, cmap='gray')
+        else:
+            axes[0].imshow(image)
+        axes[0].set_title('Input Image', fontsize=12, fontweight='bold')
+        axes[0].axis('off')
+        
+        # Panel 2: Ground Truth
+        axes[1].imshow(gt_mask, cmap='Greens', vmin=0, vmax=1)
+        axes[1].set_title('Ground Truth', fontsize=12, fontweight='bold')
+        axes[1].axis('off')
+        
+        # Panel 3: Prediction
+        axes[2].imshow(pred_mask, cmap='Reds', vmin=0, vmax=1)
+        axes[2].set_title('Prediction', fontsize=12, fontweight='bold')
+        axes[2].axis('off')
+        
+        # Panel 4: Overlay comparison
+        # Create RGB overlay: Green=GT only, Red=Pred only, Yellow=Both
+        overlay = np.zeros((*gt_mask.shape, 3), dtype=np.float32)
+        overlay[..., 0] = pred_mask  # Red channel for prediction
+        overlay[..., 1] = gt_mask    # Green channel for GT
+        # Where both overlap, it becomes yellow
+        
+        if image.ndim == 2:
+            bg = np.stack([image] * 3, axis=-1)
+        else:
+            bg = image if image.shape[-1] == 3 else np.stack([image] * 3, axis=-1)
+        
+        # Blend overlay with background
+        alpha = 0.5
+        combined = bg * (1 - alpha * np.maximum(overlay[..., 0:1], overlay[..., 1:2]))
+        combined = combined + overlay * alpha
+        combined = np.clip(combined, 0, 1)
+        
+        axes[3].imshow(combined)
+        axes[3].set_title('Overlay (G=GT, R=Pred, Y=Both)', fontsize=12, fontweight='bold')
+        axes[3].axis('off')
+        
+        # Add dice score as figure title
+        fig.suptitle(f'{name} - Dice: {dice:.4f}', fontsize=14, fontweight='bold')
+        
+        plt.tight_layout()
+        
+        # Save
+        simple_vis_dir = self.output_dir / "visualizations_simple"
+        simple_vis_dir.mkdir(parents=True, exist_ok=True)
+        
+        save_path = simple_vis_dir / f"{name}_visualization.png"
+        plt.savefig(save_path, dpi=100, bbox_inches='tight')
+        plt.close(fig)
     
     def _save_results(
         self,
@@ -483,7 +596,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save_visualizations",
         action="store_true",
-        help="Save visual snapshots with image, GT, prediction, and bounding boxes"
+        help="Save visual snapshots with image, GT, prediction, and bounding boxes for each test sample"
+    )
+    parser.add_argument(
+        "--visualize_all",
+        action="store_true",
+        help="Shortcut to enable both --save_predictions and --save_visualizations"
     )
     
     # Other arguments
@@ -522,6 +640,11 @@ def main():
     
     # Set seed
     set_seed(args.seed)
+    
+    # Handle visualize_all shortcut
+    if args.visualize_all:
+        args.save_predictions = True
+        args.save_visualizations = True
     
     # Set device
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -625,6 +748,14 @@ def main():
     print("=" * 70)
     
     print(f"\nResults saved to: {output_dir}")
+    
+    if args.save_visualizations:
+        print(f"\nVisualizations saved to:")
+        print(f"  - Detailed snapshots: {output_dir / 'visualizations'}")
+        print(f"  - Simple comparisons: {output_dir / 'visualizations_simple'}")
+    
+    if args.save_predictions:
+        print(f"  - Prediction masks: {output_dir / 'predictions'}")
     
     return metrics
 
