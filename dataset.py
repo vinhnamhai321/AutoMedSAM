@@ -3,28 +3,26 @@ Dataset module for Automatic MedSAM.
 
 This module provides data loading for training with pre-computed image embeddings.
 
-Expected directory structure:
-data/
+Expected directory structure (task-separated for LV/RV):
+processed_data/
 ├── <dataset_name>/ (e.g., ACDC)
 │   ├── train/
-│   │   ├── images/
-│   │   │   ├── sample1.png
-│   │   │   └── ...
-│   │   ├── masks/
-│   │   │   ├── sample1.png
-│   │   │   └── ...
-│   │   └── image_embeddings/
-│   │       ├── sample1.pt
-│   │       └── ...
+│   │   ├── LV/
+│   │   │   ├── images/          # .npy files (1024, 1024, 3)
+│   │   │   ├── masks/           # .npy files (1024, 1024)
+│   │   │   └── image_embeddings/ # .pt files (256, 64, 64)
+│   │   └── RV/
+│   │       ├── images/
+│   │       ├── masks/
+│   │       └── image_embeddings/
 │   ├── val/
-│   │   ├── images/
-│   │   │   └── ...
-│   │   ├── masks/
-│   │   │   └── ...
-│   │   └── image_embeddings/
-│   │       └── ...
+│   │   ├── LV/...
+│   │   └── RV/...
+│   ├── test/
+│   │   ├── LV/...
+│   │   └── RV/...
 │   └── positional_encoding/
-│       └── pe.pt  (single file for all images)
+│       └── pe.pt  (single file shared across all samples)
 """
 
 import torch
@@ -43,9 +41,12 @@ class PrecomputedEmbeddingDataset(Dataset):
     specified directory structure. This enables efficient training without
     running the heavy image encoder at each iteration.
     
+    Supports task-separated structure (LV/RV for cardiac segmentation).
+    
     Args:
-        data_dir: Root directory of the dataset (e.g., data/ACDC).
-        split: Dataset split ('train' or 'val').
+        data_dir: Root directory of the dataset (e.g., processed_data/ACDC).
+        split: Dataset split ('train', 'val', or 'test').
+        task: Segmentation task ('LV' or 'RV' for cardiac datasets).
         image_size: Target image size for masks (default 1024x1024).
     """
     
@@ -53,19 +54,22 @@ class PrecomputedEmbeddingDataset(Dataset):
         self,
         data_dir: Union[str, Path],
         split: str = "train",
+        task: str = "LV",
         image_size: Tuple[int, int] = (1024, 1024)
     ):
         super().__init__()
         
         self.data_dir = Path(data_dir)
         self.split = split
+        self.task = task
         self.image_size = image_size
         
-        # Set up paths
-        self.split_dir = self.data_dir / split
-        self.images_dir = self.split_dir / "images"
-        self.masks_dir = self.split_dir / "masks"
-        self.embeddings_dir = self.split_dir / "image_embeddings"
+        # Set up paths with task subdirectory
+        # Structure: data_dir / split / task / {images, masks, image_embeddings}
+        self.task_dir = self.data_dir / split / task
+        self.images_dir = self.task_dir / "images"
+        self.masks_dir = self.task_dir / "masks"
+        self.embeddings_dir = self.task_dir / "image_embeddings"
         
         # Validate directories
         if not self.embeddings_dir.exists():
@@ -74,7 +78,7 @@ class PrecomputedEmbeddingDataset(Dataset):
         # Load sample names from embeddings directory
         self.samples = self._load_samples()
         
-        print(f"Loaded {len(self.samples)} samples for {split} split from {self.data_dir}")
+        print(f"Loaded {len(self.samples)} samples for {split}/{task} from {self.data_dir}")
     
     def _load_samples(self) -> List[str]:
         """
@@ -97,7 +101,30 @@ class PrecomputedEmbeddingDataset(Dataset):
         Returns:
             Binary mask as numpy array [1, H, W].
         """
-        # Try different extensions
+        # Try .npy first (new format from preprocessing)
+        npy_path = self.masks_dir / f"{name}.npy"
+        if npy_path.exists():
+            mask = np.load(npy_path).astype(np.float32)
+            
+            # Handle dimensions
+            if mask.ndim == 3:
+                mask = mask[:, :, 0]
+            
+            # Binarize (masks should already be binary, but ensure it)
+            mask = (mask > 0).astype(np.float32)
+            
+            # Resize if needed
+            if mask.shape != self.image_size:
+                pil_mask = Image.fromarray((mask * 255).astype(np.uint8))
+                pil_mask = pil_mask.resize(self.image_size, Image.Resampling.NEAREST)
+                mask = np.array(pil_mask).astype(np.float32) / 255.0
+                mask = (mask > 0.5).astype(np.float32)
+            
+            # Add channel dimension [1, H, W]
+            mask = mask[np.newaxis, :, :]
+            return mask
+        
+        # Try image formats (legacy support)
         for ext in ['.png', '.jpg', '.jpeg']:
             mask_path = self.masks_dir / f"{name}{ext}"
             if mask_path.exists():
@@ -134,7 +161,24 @@ class PrecomputedEmbeddingDataset(Dataset):
         Returns:
             Image as numpy array [1, H, W] (grayscale) or [3, H, W] (RGB).
         """
-        # Try different extensions
+        # Try .npy first (new format from preprocessing)
+        npy_path = self.images_dir / f"{name}.npy"
+        if npy_path.exists():
+            image = np.load(npy_path).astype(np.float32)
+            
+            # Normalize to [0, 1]
+            if image.max() > 1.0:
+                image = image / 255.0
+            
+            # Handle channel dimension
+            if image.ndim == 2:
+                image = image[np.newaxis, :, :]  # [1, H, W]
+            elif image.ndim == 3:
+                image = np.transpose(image, (2, 0, 1))  # [C, H, W]
+            
+            return image
+        
+        # Try other formats (legacy support)
         for ext in ['.png', '.jpg', '.jpeg', '.nii.gz']:
             image_path = self.images_dir / f"{name}{ext}"
             if image_path.exists():
@@ -278,15 +322,17 @@ def load_positional_encoding(data_dir: Union[str, Path]) -> torch.Tensor:
 
 def create_dataloaders(
     data_dir: Union[str, Path],
+    task: str = "LV",
     batch_size: int = 4,
     num_workers: int = 4,
     pin_memory: bool = True
 ) -> Tuple[DataLoader, DataLoader]:
     """
-    Create train and validation dataloaders.
+    Create train and validation dataloaders for a specific task.
     
     Args:
         data_dir: Root directory of the dataset.
+        task: Segmentation task ('LV' or 'RV').
         batch_size: Batch size for dataloaders.
         num_workers: Number of workers for data loading.
         pin_memory: Whether to pin memory.
@@ -294,14 +340,18 @@ def create_dataloaders(
     Returns:
         Tuple of (train_loader, val_loader).
     """
+    print(f"\nCreating dataloaders for task: {task}")
+    
     train_dataset = PrecomputedEmbeddingDataset(
         data_dir=data_dir,
-        split="train"
+        split="train",
+        task=task
     )
     
     val_dataset = PrecomputedEmbeddingDataset(
         data_dir=data_dir,
-        split="val"
+        split="val",
+        task=task
     )
     
     train_loader = DataLoader(
@@ -320,5 +370,8 @@ def create_dataloaders(
         num_workers=num_workers,
         pin_memory=pin_memory
     )
+    
+    print(f"  Train samples: {len(train_dataset)}")
+    print(f"  Val samples: {len(val_dataset)}")
     
     return train_loader, val_loader

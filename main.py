@@ -4,22 +4,28 @@ Main entry point for Automatic MedSAM training.
 This script provides a command-line interface for training the Automatic MedSAM
 model using pre-computed image embeddings.
 
-Expected data directory structure:
-data/
+Expected data directory structure (task-separated for LV/RV):
+processed_data/
 ├── <dataset_name>/ (e.g., ACDC)
 │   ├── train/
-│   │   ├── images/
-│   │   ├── masks/
-│   │   └── image_embeddings/
+│   │   ├── LV/
+│   │   │   ├── images/
+│   │   │   ├── masks/
+│   │   │   └── image_embeddings/
+│   │   └── RV/
+│   │       └── ...
 │   ├── val/
-│   │   ├── images/
-│   │   ├── masks/
-│   │   └── image_embeddings/
+│   │   ├── LV/...
+│   │   └── RV/...
 │   └── positional_encoding/
 │       └── pe.pt
 
 Usage:
-    python main.py --data_dir ./data/ACDC --epochs 100 --batch_size 4
+    # Train LV (Left Ventricle) segmentation
+    python main.py --data_dir ./processed_data/ACDC --task LV --epochs 100
+    
+    # Train RV (Right Ventricle) segmentation
+    python main.py --data_dir ./processed_data/ACDC --task RV --epochs 100
 """
 
 # Fix OpenMP duplicate library issue (must be before other imports)
@@ -46,7 +52,14 @@ def parse_args() -> argparse.Namespace:
         "--data_dir",
         type=str,
         required=True,
-        help="Path to dataset directory (e.g., ./data/ACDC)"
+        help="Path to dataset directory (e.g., ./processed_data/ACDC)"
+    )
+    parser.add_argument(
+        "--task",
+        type=str,
+        default="LV",
+        choices=["LV", "RV"],
+        help="Segmentation task: 'LV' (Left Ventricle) or 'RV' (Right Ventricle)"
     )
     parser.add_argument(
         "--medsam_checkpoint",
@@ -140,14 +153,15 @@ def main():
     # Print header
     print("=" * 70)
     print("  Automatic MedSAM - Weak Supervision Medical Image Segmentation")
+    print(f"  Task: {args.task} ({'Left Ventricle' if args.task == 'LV' else 'Right Ventricle'})")
     print("=" * 70)
     print()
     
     # Set seed
     set_seed(args.seed)
     
-    # Create output directories
-    output_dir = Path(args.output_dir)
+    # Create output directories (task-specific)
+    output_dir = Path(args.output_dir) / args.task
     checkpoint_dir = output_dir / "checkpoints"
     log_dir = output_dir / "logs"
     snapshot_dir = output_dir / "debug_snapshots"
@@ -160,12 +174,13 @@ def main():
     if not data_dir.exists():
         raise FileNotFoundError(f"Data directory not found: {data_dir}")
     
-    # Check for required subdirectories
+    # Check for required subdirectories (task-specific structure)
+    task = args.task
     required_dirs = [
-        data_dir / "train" / "image_embeddings",
-        data_dir / "train" / "masks",
-        data_dir / "val" / "image_embeddings",
-        data_dir / "val" / "masks",
+        data_dir / "train" / task / "image_embeddings",
+        data_dir / "train" / task / "masks",
+        data_dir / "val" / task / "image_embeddings",
+        data_dir / "val" / task / "masks",
         data_dir / "positional_encoding"
     ]
     
@@ -175,6 +190,9 @@ def main():
     
     # Create configuration
     config = AutoMedSAMConfig(
+        # Task selection
+        task=args.task,
+        
         # Data paths
         data_dir=data_dir,
         medsam_checkpoint_path=Path(args.medsam_checkpoint),

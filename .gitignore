@@ -29,6 +29,7 @@ data/
 data_tmp/
 embeddings_cache/
 ACDC/raw/
+processed_data/
 
 # Output directories
 output/

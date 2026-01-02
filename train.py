@@ -146,8 +146,8 @@ class Trainer:
                 self.best_dice = dice_to_check
                 self._save_checkpoint(is_best=True)
             
-            if (epoch + 1) % 10 == 0:
-                self._save_checkpoint(is_best=False, suffix=f"epoch_{epoch+1}")
+            # Save latest checkpoint
+                self._save_checkpoint(is_best=False, suffix="latest_epoch")
         
         # Save final artifacts
         self._save_training_artifacts()
@@ -245,15 +245,15 @@ class Trainer:
                         'prompts': {k: v.cpu() for k, v in output['prompts'].items()} if 'prompts' in output else {}
                     }
                     
-                    visualize_batch(
-                        batch=batch_with_prompts,
-                        predictions=predictions.cpu(),
-                        epoch=self.current_epoch,
-                        batch_idx=batch_idx,
-                        visualizer=self.visualizer,
-                        loss_dict=loss_output.to_dict(),
-                        max_samples=2
-                    )
+                    # visualize_batch(
+                    #     batch=batch_with_prompts,
+                    #     predictions=predictions.cpu(),
+                    #     epoch=self.current_epoch,
+                    #     batch_idx=batch_idx,
+                    #     visualizer=self.visualizer,
+                    #     loss_dict=loss_output.to_dict(),
+                    #     max_samples=2
+                    # )
             
             self.global_step += 1
             
@@ -297,12 +297,12 @@ class Trainer:
             
             if self.config.use_amp:
                 with autocast("cuda"):
-                    output = self.model(embeddings)
+                    output = self.model(embeddings, return_prompts=True)
                     predictions = output['masks']
                     pred_bboxes = output['prompts']['box_coords']
                     loss_output = self.criterion(predictions, bboxes, pred_bboxes)
             else:
-                output = self.model(embeddings)
+                output = self.model(embeddings, return_prompts=True)
                 predictions = output['masks']
                 pred_bboxes = output['prompts']['box_coords']
                 loss_output = self.criterion(predictions, bboxes, pred_bboxes)
@@ -420,12 +420,17 @@ def train_automatic_medsam(config: AutoMedSAMConfig) -> Dict[str, List[float]]:
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
     
+    print(f"\n{'='*60}")
+    print(f"Training Task: {config.task}")
+    print(f"{'='*60}")
+    
     # Load positional encoding
     image_pe = load_positional_encoding(config.data_dir)
     
-    # Create dataloaders
+    # Create dataloaders with task parameter
     train_dataloader, val_dataloader = create_dataloaders(
         data_dir=config.data_dir,
+        task=config.task,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         pin_memory=config.pin_memory

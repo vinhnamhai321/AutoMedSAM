@@ -389,7 +389,8 @@ class AutoMedSAMLoss(nn.Module):
         self,
         lambda_tightness: float = 1e-4,
         lambda_size: float = 1e-2,
-        lambda_bbox: float = 1e-3,
+        # lambda_bbox: float = 1e-3,
+        lambda_bbox: float = 1,
         barrier_t: float = 5.0,
         size_lower_bound: float = 0.01,
         size_upper_bound: float = 0.99
@@ -432,8 +433,11 @@ class AutoMedSAMLoss(nn.Module):
         
         # Compute individual loss components
         l_empty = self.empty_loss(predictions, bboxes)
-        l_tightbox = self.tightness_loss(predictions, bboxes)
+        # NOTE: l_tightbox and l_size are commented out - training uses only l_empty and l_bbox
+        # l_tightbox = self.tightness_loss(predictions, bboxes)
         l_size = self.size_loss(predictions, bboxes)
+        l_tightbox = torch.tensor(0.0, device=predictions.device)  # Placeholder for logging
+        # l_size = torch.tensor(0.0, device=predictions.device)  # Placeholder for logging
         
         # Compute bbox loss if predictions are provided
         if pred_bboxes is not None:
@@ -441,10 +445,10 @@ class AutoMedSAMLoss(nn.Module):
         else:
             l_bbox = torch.tensor(0.0, device=predictions.device)
         
-        # Combine losses
+        # Combine losses (only l_empty and l_bbox are active)
         total_loss = (
             l_empty +
-            self.lambda_tightness * l_tightbox +
+            # self.lambda_tightness * l_tightbox +  # Disabled
             self.lambda_size * l_size +
             self.lambda_bbox * l_bbox
         )

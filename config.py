@@ -37,6 +37,10 @@ class AutoMedSAMConfig:
         seed: Random seed for reproducibility.
     """
     
+    # ==================== Task Configuration ====================
+    # Task to train: 'LV' (Left Ventricle) or 'RV' (Right Ventricle)
+    task: str = "LV"
+    
     # ==================== Model Architecture ====================
     image_size: Tuple[int, int] = (1024, 1024)
     embedding_size: Tuple[int, int] = (64, 64)
@@ -52,7 +56,7 @@ class AutoMedSAMConfig:
     # ==================== Loss Weights (from paper Section 2.3) ====================
     lambda_tightness: float = 1e-4  # λ₁ = 0.0001 for tightness constraint
     lambda_size: float = 1e-2       # λ₂ = 0.01 for size constraint
-    lambda_bbox: float = 1e-3       # λ₃ = 0.001 for bounding box MSE loss
+    lambda_bbox: float = 1      # λ₃ = 0.001 for bounding box MSE loss
     barrier_t: float = 5.0          # t parameter for pseudo log-barrier ψ_t(x)
     
     # ==================== Size Constraint Parameters ====================
@@ -67,7 +71,8 @@ class AutoMedSAMConfig:
     pin_memory: bool = True
     
     # ==================== Paths ====================
-    data_dir: Path = field(default_factory=lambda: Path("./data/ACDC"))
+    # Updated for new ACDC structure: processed_data/ACDC/{split}/{task}/
+    data_dir: Path = field(default_factory=lambda: Path("./processed_data/ACDC"))
     checkpoint_dir: Path = field(default_factory=lambda: Path("./output/checkpoints"))
     log_dir: Path = field(default_factory=lambda: Path("./output/logs"))
     snapshot_dir: Path = field(default_factory=lambda: Path("./output/debug_snapshots"))
@@ -120,10 +125,13 @@ class AutoMedSAMConfig:
             "Size bounds must satisfy 0 < a < b < 1"
         assert self.image_size[0] == self.image_size[1] == 1024, \
             "MedSAM requires 1024x1024 input images"
+        assert self.task in ["LV", "RV"], \
+            "Task must be 'LV' (Left Ventricle) or 'RV' (Right Ventricle)"
     
     def to_dict(self) -> dict:
         """Convert config to dictionary for logging."""
         return {
+            "task": self.task,
             "image_size": self.image_size,
             "batch_size": self.batch_size,
             "learning_rate": self.learning_rate,
