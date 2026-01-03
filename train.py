@@ -147,7 +147,7 @@ class Trainer:
                 self._save_checkpoint(is_best=True)
             
             # Save latest checkpoint
-                self._save_checkpoint(is_best=False, suffix="latest_epoch")
+            self._save_checkpoint(is_best=False, suffix="latest_epoch")
         
         # Save final artifacts
         self._save_training_artifacts()
